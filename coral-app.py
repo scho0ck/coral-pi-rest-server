@@ -109,4 +109,4 @@ if __name__ == "__main__":
     interpreter.allocate_tensors()
     print("\n Initialised interpreter with model : {}".format(model_file))
 
-    app.run(host="0.0.0.0", debug=True, port=args.port)
+    app.run(host="0.0.0.0", debug=True, port=args.port, use_reloader=False)
