@@ -7,6 +7,7 @@ import argparse
 import io
 import os
 import logging
+import time
 
 import flask
 from PIL import Image
@@ -28,6 +29,7 @@ DEFAULT_LABELS = "coco_labels.txt"
 
 ROOT_URL = "/v1/vision/detection"
 
+
 @app.route("/")
 def info():
     info_str = "Flask app exposing tensorflow lite model {}".format(MODEL)
@@ -37,25 +39,23 @@ def info():
 @app.route(ROOT_URL, methods=["POST"])
 def predict():
     data = {"success": False}
-
     if flask.request.method == "POST":
         if flask.request.files.get("image"):
             image_file = flask.request.files["image"]
             image_bytes = image_file.read()
             image = Image.open(io.BytesIO(image_bytes))
 
-            size = common.input_size(interpreter)
-            image = image.convert("RGB").resize(size, Image.ANTIALIAS)
-
-            # Run an inference
-            common.set_input(interpreter, image)
-            interpreter.invoke()
             _, scale = common.set_resized_input(
                 interpreter, image.size, lambda size: image.resize(size, Image.ANTIALIAS))
-
-            threshold=0.4
+            #start inference
+            start = time.perf_counter()
+            interpreter.invoke()
+            inference_time = time.perf_counter() - start
             objs = detect.get_objects(interpreter, threshold, scale)
+            app.logger.debug('Detection time %.2f ms' % (inference_time * 1000))
 
+            if not objs:
+                app.logger.info('No detections in image')
             if objs:
                 data["success"] = True
                 preds = []
@@ -75,6 +75,7 @@ def predict():
 
     # return the data dictionary as a JSON response
     return flask.jsonify(data)
+    
 
 
 if __name__ == "__main__":
@@ -89,8 +90,15 @@ if __name__ == "__main__":
         default=DEFAULT_MODEL,
         help="model file",
     )
-    parser.add_argument("--labels", default=DEFAULT_LABELS, help="labels file of model")
-    parser.add_argument("--port", default=5000, type=int, help="port number")
+    parser.add_argument(
+        '--threshold', type=float, default=0.4,
+        help='Classification score threshold')
+    parser.add_argument("--labels", default=DEFAULT_LABELS, 
+        help="labels file of model"
+    )
+    parser.add_argument("--port", default=5000, type=int, 
+        help="port number"
+    )
     args = parser.parse_args()
 
     global MODEL
@@ -104,9 +112,13 @@ if __name__ == "__main__":
     global labels
     labels = dataset.read_label_file(labels_file)
 
+    global threshold
+    threshold = args.threshold
+
     global interpreter
     interpreter = edgetpu.make_interpreter(model_file)
     interpreter.allocate_tensors()
-    print("\n Initialised interpreter with model : {}".format(model_file))
+    app.logger.info("Initialised interpreter with model : {}".format(model_file))
+    app.logger.info('Note: The first inference is slow because it includes loading the model into Edge TPU memory')
 
     app.run(host="0.0.0.0", debug=True, port=args.port, use_reloader=False)
